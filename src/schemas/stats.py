@@ -1,0 +1,20 @@
+"""Stats endpoint schema."""
+
+from __future__ import annotations
+
+from datetime import datetime
+
+from pydantic import BaseModel, Field
+
+
+class LanguageCount(BaseModel):
+    language: str
+    count: int
+
+
+class StatsResponse(BaseModel):
+    total_tracked_repos: int
+    repos_added_today: int
+    content_generated_today: int
+    top_languages: list[LanguageCount] = Field(default_factory=list)
+    last_ingestion_at: datetime | None = None
