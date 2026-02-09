@@ -19,6 +19,9 @@ router = APIRouter()
 async def get_stats(session: AsyncSession = Depends(get_db)) -> StatsResponse:
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     total = (await session.execute(select(func.count(Repository.id)))).scalar() or 0
+    passing = (
+        await session.execute(select(func.count(Repository.id)).where(Repository.quality_passed == True))
+    ).scalar() or 0
     repos_today = (
         await session.execute(select(func.count(Repository.id)).where(Repository.first_seen_at >= today_start))
     ).scalar() or 0
@@ -36,6 +39,7 @@ async def get_stats(session: AsyncSession = Depends(get_db)) -> StatsResponse:
     last_snap = (await session.execute(select(func.max(TrendSnapshot.snapshot_at)))).scalar()
     return StatsResponse(
         total_tracked_repos=total,
+        repos_passing_quality=passing,
         repos_added_today=repos_today,
         content_generated_today=content_today,
         top_languages=top_languages,

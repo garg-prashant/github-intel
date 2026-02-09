@@ -12,7 +12,8 @@ export default async function DashboardPage() {
     fetchStats(),
   ]);
 
-  const totalTracked = stats?.total_tracked_repos ?? 0;
+  const totalInDb = stats?.total_tracked_repos ?? 0;
+  const hasAnyRepos = totalInDb > 0;
 
   return (
     <div className="space-y-12">
@@ -31,7 +32,7 @@ export default async function DashboardPage() {
 
       <StatsStrip stats={stats} />
 
-      {totalTracked === 0 && (
+      {!hasAnyRepos && (
         <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-8 sm:p-10">
           <div className="mx-auto max-w-lg text-center">
             <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-[var(--accent)]/10 text-[var(--accent)]">
@@ -47,7 +48,7 @@ export default async function DashboardPage() {
         </div>
       )}
 
-      {totalTracked > 0 && (
+      {hasAnyRepos && (
         <div className="space-y-8">
           <FilterBar categories={categories} />
           <DashboardContent />

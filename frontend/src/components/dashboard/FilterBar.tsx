@@ -9,9 +9,16 @@ interface FilterBarProps {
   categories: CategoryItem[];
 }
 
+const QUALITY_OPTIONS = [
+  { value: "passed", label: "Passing quality" },
+  { value: "all", label: "All repos" },
+  { value: "not_passed", label: "Didn't pass quality" },
+] as const;
+
 export function FilterBar({ categories }: FilterBarProps) {
   const [category, setCategory] = useQueryState("category", { defaultValue: "" });
   const [sortBy, setSortBy] = useQueryState("sort_by", { defaultValue: "score" });
+  const [quality, setQuality] = useQueryState("quality", { defaultValue: "passed" });
   const [, setPage] = useQueryState("page");
 
   const handleCategoryChange = (slug: string) => {
@@ -21,6 +28,11 @@ export function FilterBar({ categories }: FilterBarProps) {
 
   const handleSortChange = (value: string) => {
     setSortBy(value);
+    setPage("1");
+  };
+
+  const handleQualityChange = (value: string) => {
+    setQuality(value);
     setPage("1");
   };
 
@@ -57,6 +69,26 @@ export function FilterBar({ categories }: FilterBarProps) {
             {c.name}
           </button>
         ))}
+        </div>
+        <span className="text-xs font-medium uppercase tracking-wider text-[var(--muted)]">
+          Quality
+        </span>
+        <div className="inline-flex rounded-lg border border-[var(--border)] bg-[var(--background)] p-1">
+          {QUALITY_OPTIONS.map((opt) => (
+            <button
+              type="button"
+              key={opt.value}
+              onClick={() => handleQualityChange(opt.value)}
+              className={cn(
+                "rounded-md px-3 py-2 text-sm font-medium transition",
+                quality === opt.value
+                  ? "bg-[var(--surface)] text-[var(--foreground)] shadow-sm border border-[var(--border)]"
+                  : "text-[var(--muted)] hover:text-[var(--foreground)]"
+              )}
+            >
+              {opt.label}
+            </button>
+          ))}
         </div>
         <span className="text-xs font-medium uppercase tracking-wider text-[var(--muted)]">
           Sort

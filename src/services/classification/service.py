@@ -1,4 +1,4 @@
-"""Combined classifier: 0.4 * embedding + 0.35 * keyword + 0.25 * language; assign if > 0.3."""
+"""Combined classifier: keyword + language only (no embeddings); assign if combined > 0.3."""
 
 from __future__ import annotations
 
@@ -12,20 +12,15 @@ from sqlalchemy.orm import selectinload
 
 from src.models.category import Category, RepositoryCategory
 from src.models.repository import Repository
-from src.services.classification.embedding_classifier import (
-    embedding_confidences_for_repo,
-    ensure_repo_embedding,
-)
 from src.services.classification.keyword_heuristics import keyword_confidence
 from src.services.classification.language_analyzer import language_confidence
 
 logger = logging.getLogger(__name__)
 
-W_EMBEDDING = 0.4
-W_KEYWORD = 0.35
-W_LANGUAGE = 0.25
+W_KEYWORD = 0.6
+W_LANGUAGE = 0.4
 MIN_COMBINED = 0.3
-METHOD = "combined"
+METHOD = "keyword_language"
 
 
 async def classify_new_repos(session: AsyncSession, limit: int = 500) -> int:
@@ -42,7 +37,7 @@ async def classify_new_repos(session: AsyncSession, limit: int = 500) -> int:
     # Repos that have no categories yet (or we could process all and upsert)
     repos_result = await session.execute(
         select(Repository)
-        .options(selectinload(Repository.repository_categories), selectinload(Repository.repo_embedding))
+        .options(selectinload(Repository.repository_categories))
         .limit(limit * 2)
     )
     repos = list(repos_result.scalars().unique().all())
@@ -55,15 +50,12 @@ async def classify_new_repos(session: AsyncSession, limit: int = 500) -> int:
     assigned = 0
     for repo in to_process:
         try:
-            repo_emb = await ensure_repo_embedding(session, repo)
             kw = {c.id: keyword_confidence(repo, c) for c in categories}
             lang = {c.id: language_confidence(repo, c) for c in categories}
-            emb_conf = await embedding_confidences_for_repo(session, repo, categories, repo_emb)
             for cat in categories:
                 cid = cat.id
                 combined = (
-                    W_EMBEDDING * emb_conf.get(cid, 0)
-                    + W_KEYWORD * kw.get(cid, 0)
+                    W_KEYWORD * kw.get(cid, 0)
                     + W_LANGUAGE * lang.get(cid, 0)
                 )
                 if combined < MIN_COMBINED:
@@ -84,7 +76,7 @@ async def classify_new_repos(session: AsyncSession, limit: int = 500) -> int:
                 )
                 await session.execute(stmt)
                 assigned += 1
+            await session.commit()
         except Exception as e:
             logger.warning("Classification failed for repo %s: %s", repo.full_name, e)
-    await session.commit()
     return assigned

@@ -1,5 +1,6 @@
 export interface Stats {
   total_tracked_repos: number;
+  repos_passing_quality: number;
   repos_added_today: number;
   content_generated_today: number;
   top_languages: { language: string; count: number }[];

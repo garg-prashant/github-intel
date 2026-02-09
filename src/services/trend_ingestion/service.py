@@ -1,4 +1,4 @@
-"""Orchestration: scrape trending, fetch metadata, upsert repos, create snapshots."""
+"""Orchestration: topic-based search, fetch metadata, upsert repos, create snapshots."""
 
 from __future__ import annotations
 
@@ -20,15 +20,11 @@ from src.services.trend_ingestion.scrapers import scrape_trending_full_names
 logger = logging.getLogger(__name__)
 
 README_MAX_CHARS = 15_000
-SEARCH_QUERIES_BY_CATEGORY: dict[str, list[str]] = {
-    "ai-ml": ['"machine learning" framework stars:>100'],
-    "llms-agents": ['"llm" "agent" framework stars:>50', '"RAG" retrieval stars:>30'],
-    "mcp-tooling": ['"mcp server" OR "model context protocol" stars:>10'],
-    "backend": ['api framework backend stars:>100 language:python'],
-    "python-libs": ["python library stars:>100"],
-    "web3-crypto": ["blockchain ethereum stars:>50"],
-    "devops-mlops": ["mlops pipeline stars:>30"],
-}
+
+# Topic-based discovery (GitHub search: https://github.com/search?q=agent&type=repositories)
+TOPIC_SEARCH_TERMS: list[str] = ["AI", "agent", "MCP", "crypto"]
+ALLOWED_LANGUAGES: frozenset[str] = frozenset({"Go", "Python", "TypeScript", "JavaScript"})
+MIN_STARS_TOPIC = 10
 
 
 def _parse_iso(s: str | None) -> datetime | None:
@@ -157,35 +153,37 @@ class TrendIngestionService:
             logger.info("Capping trending repos to %s", max_trending)
         return await self._fetch_and_upsert_repos(full_names)
 
-    async def ingest_from_search_api(self) -> int:
-        """Run curated search queries per category; take top max_repos_per_category per category, then upsert."""
+    async def ingest_from_topic_search(self) -> int:
+        """Discover repos via topic search (AI, agent, MCP, crypto), filter by language (Go, Python, TypeScript, JavaScript), then upsert."""
         settings = Settings()
-        max_per_cat = settings.max_repos_per_category
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
-        all_full_names: list[str] = []
-        seen_global: set[str] = set()
+        max_per_topic = settings.max_repos_per_category
+        total_cap = settings.max_trending_repos
+        seen: dict[str, int] = {}  # full_name -> stars_count for dedupe and sort
         async with GitHubClient() as client:
-            for category, query_templates in SEARCH_QUERIES_BY_CATEGORY.items():
-                category_names: list[str] = []
-                for q in query_templates:
-                    if len(category_names) >= max_per_cat:
-                        break
-                    query = f"{q} pushed:>{cutoff}"
-                    try:
-                        data = await client.search_repositories(query, page=1, per_page=max_per_cat)
-                        items = data.get("items") or []
-                        for item in items:
-                            if len(category_names) >= max_per_cat:
-                                break
-                            fn = item.get("full_name")
-                            if fn and fn not in seen_global:
-                                category_names.append(fn)
-                                seen_global.add(fn)
-                    except Exception as e:
-                        logger.warning("Search failed %s: %s", query[:50], e)
-                for fn in category_names:
-                    all_full_names.append(fn)
-        return await self._fetch_and_upsert_repos(all_full_names)
+            for topic in TOPIC_SEARCH_TERMS:
+                query = f"topic:{topic} stars:>{MIN_STARS_TOPIC}"
+                try:
+                    data = await client.search_repositories(query, page=1, per_page=max_per_topic)
+                    items = data.get("items") or []
+                    for item in items:
+                        lang = item.get("language")
+                        if lang not in ALLOWED_LANGUAGES:
+                            continue
+                        fn = item.get("full_name")
+                        if not fn:
+                            continue
+                        stars = item.get("stargazers_count") or 0
+                        if fn not in seen or seen[fn] < stars:
+                            seen[fn] = stars
+                except Exception as e:
+                    logger.warning("Topic search failed %s: %s", query, e)
+        if not seen:
+            logger.warning("No repos from topic search (topics=%s, languages=%s)", TOPIC_SEARCH_TERMS, list(ALLOWED_LANGUAGES))
+            return 0
+        # Sort by stars desc, take up to total_cap
+        full_names = [fn for fn, _ in sorted(seen.items(), key=lambda x: -x[1])[:total_cap]]
+        logger.info("Topic search: %s unique repos (capped at %s)", len(full_names), total_cap)
+        return await self._fetch_and_upsert_repos(full_names)
 
     async def _fetch_and_upsert_repos(self, full_names: list[str]) -> int:
         """Fetch each repo from API (or use cached DB row), upsert Repository and create TrendSnapshot."""
@@ -201,6 +199,7 @@ class TrendIngestionService:
                     cached = await self._get_cached_repo(full_name)
                     if cached is not None:
                         await self._add_snapshot_from_cached_repo(cached)
+                        await self.session.commit()
                         count += 1
                         logger.debug("Used cached repo: %s", full_name)
                         continue
@@ -212,6 +211,7 @@ class TrendIngestionService:
                     if not repo_data or repo_data.get("id") is None:
                         continue
                     await self._upsert_repo_and_snapshot(client, repo_data)
+                    await self.session.commit()
                     count += 1
                 except Exception as e:
                     logger.warning("Failed to process %s: %s", full_name, e)
@@ -317,6 +317,16 @@ class TrendIngestionService:
             commits_7d=commits_7d,
         )
         self.session.add(snapshot)
+
+    async def reset_all_repo_data(self) -> int:
+        """Delete all repositories (and cascade to trend_snapshots, repository_categories, generated_content, repo_embeddings).
+        Use this to start from scratch so the next pipeline run inserts fresh data and stats (tracked / added today) update.
+        Leaves categories table intact. Returns number of repositories deleted."""
+        from sqlalchemy import delete
+
+        result = await self.session.execute(delete(Repository))
+        await self.session.commit()
+        return result.rowcount or 0
 
     async def cleanup_old_snapshots(self, older_than_days: int = 30) -> int:
         """Delete trend_snapshots older than given days. Returns deleted count."""

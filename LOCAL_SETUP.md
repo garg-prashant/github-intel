@@ -79,32 +79,34 @@ The dashboard shows only repos with `quality_passed = true` (set by the scoring 
 
 - **UI:** Click **“Run pipeline now”** on the dashboard. Worker must be running; wait a few minutes and refresh.
 - **API:** `curl -X POST http://localhost:8000/api/v1/pipeline/run`
-- **CLI (ingestion only):** `python scripts/run_ingestion.py --trending` or `--search`, then trigger the rest from the UI.
+- **CLI (ingestion only):** `python scripts/run_ingestion.py --topic` (or `--search`), then trigger the rest from the UI.
+
+**Tracked / added counts not updating when you re-run?** The pipeline **upserts** repos (same set of topics → same repos → no new rows). To start from scratch so counts reflect the run:
+- **API:** `curl -X POST "http://localhost:8000/api/v1/pipeline/run?reset_first=true"`
+- **CLI:** `python scripts/run_ingestion.py --reset --topic` (clears all repo data, then ingests; then run the rest of the pipeline from the UI or trigger without `reset_first`).
 
 #### How the pipeline works (what happens when you run it)
 
-When you trigger the pipeline (UI or `POST /api/v1/pipeline/run`), a **Celery chain** runs **five steps in order**. Each step finishes before the next starts. The UI shows progress for each step.
+When you trigger the pipeline (UI or `POST /api/v1/pipeline/run`), a **Celery chain** runs **four steps in order**. Each step finishes before the next starts. The UI shows progress for each step.
 
 | Step | What it does | Where data goes |
 |------|--------------|-----------------|
-| **1. Ingest trending** | Scrapes github.com/trending (daily/weekly, several languages). For each repo (capped by `MAX_TRENDING_REPOS`), calls GitHub API: repo metadata, README, languages, commit activity. | Inserts/updates `repositories` and `trend_snapshots`. Waits `GITHUB_REQUEST_DELAY_SECONDS` between repos to avoid rate limits. |
-| **2. Ingest search** | For each of the 7 categories, runs a GitHub search query and takes up to `MAX_REPOS_PER_CATEGORY` repos. Fetches same metadata (repo, README, languages, commit activity) for each. | Same as above: `repositories` and `trend_snapshots`. De-duplicates by repo; total new/updated repos is at most ~35 (search) plus whatever came from trending. |
-| **3. Score & filter** | Computes a trend score for every repo (from snapshots: stars/forks deltas, commit activity). Applies quality filters (e.g. min stars, not archived). Sets `quality_passed = true` for repos that pass. | Updates `repositories.current_trend_score` and `repositories.quality_passed`. |
-| **4. Classify** | For repos that don’t yet have categories (or have fewer than 2), runs classification: **keyword** + **embedding** (README vs category profiles) + **language** signals. Combines into a confidence per category and assigns categories above a threshold. | Inserts/updates `repository_categories`. Embeddings are stored in `repo_embeddings` (local model by default, no OpenAI cost). |
-| **5. Generate content** | Picks up to **top N repos per category** (N = `MAX_REPOS_PER_CATEGORY`) that have `quality_passed` and the fewest generated content rows. For each, generates up to 5 content types (quick start, mental model, recipe, etc.) via LLM, respecting `MAX_REPOS_PER_DAY`. | Inserts into `generated_content`. Uses OpenAI or Anthropic (set in `.env`); this is the step that incurs LLM cost. |
+| **1. Ingest topic search** | GitHub search by **topics** (AI, agent, MCP, crypto); keeps only repos with **language** in Go, Python, TypeScript, JavaScript. Takes up to `MAX_REPOS_PER_CATEGORY` per topic, dedupes, then caps total at `MAX_TRENDING_REPOS`. For each repo, fetches metadata, README, languages, commit activity. | Inserts/updates `repositories` and `trend_snapshots`. Waits `GITHUB_REQUEST_DELAY_SECONDS` between repos to avoid rate limits. |
+| **2. Score & filter** | Computes a trend score for every repo (from snapshots: stars/forks deltas, commit activity). Applies quality filters (e.g. min stars, not archived). Sets `quality_passed = true` for repos that pass. | Updates `repositories.current_trend_score` and `repositories.quality_passed`. |
+| **3. Classify** | For repos that don’t yet have categories (or have fewer than 2), runs classification: **keyword** + **embedding** (README vs category profiles) + **language** signals. Combines into a confidence per category and assigns categories above a threshold. | Inserts/updates `repository_categories`. Embeddings are stored in `repo_embeddings` (local model by default, no OpenAI cost). |
+| **4. Generate content** | Picks up to **top N repos per category** (N = `MAX_REPOS_PER_CATEGORY`) that have `quality_passed` and the fewest generated content rows. For each, generates up to 5 content types (quick start, mental model, recipe, etc.) via LLM, respecting `MAX_REPOS_PER_DAY`. | Inserts into `generated_content`. Uses OpenAI or Anthropic (set in `.env`); this is the step that incurs LLM cost. |
 
-**Flow summary:** Ingest (GitHub → DB) → Score (DB) → Classify (DB + optional embeddings) → Content (LLM → DB). The dashboard and API read from `repositories`, `repository_categories`, and `generated_content`; only repos with `quality_passed = true` appear on the trending list.
+**Flow summary:** Ingest (GitHub topic search → DB) → Score (DB) → Classify (DB + optional embeddings) → Content (LLM → DB). The dashboard and API read from `repositories`, `repository_categories`, and `generated_content`; only repos with `quality_passed = true` appear on the trending list.
 
 Set `GITHUB_TOKEN` for better ingestion rate limits; set LLM keys for classification and content generation.
 
 **Limiting repos (avoid GitHub rate limits and high OpenAI/Anthropic bills):**  
-The app is configured to run on **top 5 repos per category** by default:
+The app uses **topic search only** (no trending/language discovery):
 
-- **Search ingestion:** At most 5 repos per category (7 categories → up to 35 repos from search). Set `MAX_REPOS_PER_CATEGORY=5` in `.env` (default).
-- **Trending ingestion:** Capped at 25 repos total across all trending views. Set `MAX_TRENDING_REPOS=25` in `.env` (default).
+- **Topic ingestion:** Topics = AI, agent, MCP, crypto. Languages = Go, Python, TypeScript, JavaScript. At most `MAX_REPOS_PER_CATEGORY` repos per topic (default 5), then total capped at `MAX_TRENDING_REPOS` (default 25). Set in `.env`.
 - **Content generation:** Only the top 5 repos per category (by trend score) get LLM-generated content; daily cap still applies via `MAX_REPOS_PER_DAY=20`.
 
-So each pipeline run ingests at most ~35 (search) + 25 (trending) unique repos, and generates content for up to 5 per category (with a daily content cap).
+So each pipeline run ingests at most 25 unique repos from topic search (by default), and generates content for up to 5 per category (with a daily content cap).
 
 **Avoiding GitHub 503 / rate limits:** Set `GITHUB_REQUEST_DELAY_SECONDS=1.0` (default) in `.env` so the worker waits 1 second between each repo during ingestion. That slows the run but prevents "503 Service Unavailable" and secondary rate limits. Increase to 1.5–2 if you still see 503s.
 
@@ -120,7 +122,7 @@ curl -s http://localhost:8000/api/v1/health | jq
 
 - API docs: http://localhost:8000/docs  
 - Pipeline: `curl -X POST http://localhost:8000/api/v1/pipeline/run`  
-- Ingestion only: `python scripts/run_ingestion.py --trending` or `--cleanup`
+- Ingestion only: `python scripts/run_ingestion.py --topic` or `--cleanup`
 
 ---
 

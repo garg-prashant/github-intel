@@ -23,18 +23,29 @@ async def get_trending(
     sort_by: str = Query("score", pattern="^(score|recency)$"),
     language: str | None = Query(None),
     mode: str = Query("overall", pattern="^(overall|recent)$"),
+    quality: str = Query("passed", pattern="^(passed|all|not_passed)$", description="passed=only passing, all=all repos, not_passed=only not passing"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=50),
 ) -> PaginatedResponse[TrendingRepoItem]:
-    q = (
-        select(Repository)
-        .where(Repository.quality_passed == True)
-        .options(
+    # Quality filter: passed (default), all, not_passed
+    if quality == "passed":
+        quality_filter = Repository.quality_passed == True
+    elif quality == "not_passed":
+        quality_filter = Repository.quality_passed == False
+    else:
+        quality_filter = None  # all: no filter
+
+    base_opts = (
             selectinload(Repository.repository_categories).selectinload(RepositoryCategory.category),
             selectinload(Repository.generated_content),
             selectinload(Repository.trend_snapshots),
         )
-    )
+    q = select(Repository).options(*base_opts)
+    if quality_filter is not None:
+        q = q.where(quality_filter)
+    count_q = select(Repository.id)
+    if quality_filter is not None:
+        count_q = count_q.where(quality_filter)
     if category:
         q = q.join(RepositoryCategory).join(Category).where(Category.slug == category)
     if language:
@@ -45,8 +56,6 @@ async def get_trending(
         q = q.order_by(Repository.current_trend_score.desc().nullslast())
     else:
         q = q.order_by(Repository.pushed_at_gh.desc())
-    # Count distinct repos (join can duplicate rows when filtering by category)
-    count_q = select(Repository.id).where(Repository.quality_passed == True)
     if category:
         count_q = count_q.join(RepositoryCategory).join(Category).where(Category.slug == category)
     if language:

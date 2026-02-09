@@ -63,8 +63,8 @@ class Settings(BaseSettings):
 
     # Ingestion caps (avoid GitHub rate limits and reduce API/LLM cost)
     max_repos_per_category: int = Field(
-        default=5, ge=1, le=50,
-        description="Max repos to ingest per category (search) and to use for content per category",
+        default=10, ge=1, le=50,
+        description="Max repos to ingest per topic (search) and to use for content per category",
     )
     max_trending_repos: int = Field(
         default=25, ge=1, le=100,

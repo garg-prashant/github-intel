@@ -1,4 +1,4 @@
-"""Ingestion tasks: trending scrape, search API, cleanup snapshots."""
+"""Ingestion tasks: topic search (AI, agent, MCP, crypto), cleanup snapshots."""
 
 import asyncio
 import logging
@@ -10,6 +10,12 @@ from src.services.trend_ingestion.service import TrendIngestionService
 logger = logging.getLogger(__name__)
 
 
+async def _run_topic_search_ingestion() -> int:
+    async with session_scope() as session:
+        svc = TrendIngestionService(session)
+        return await svc.ingest_from_topic_search()
+
+
 async def _run_trending_ingestion() -> int:
     async with session_scope() as session:
         svc = TrendIngestionService(session)
@@ -17,9 +23,10 @@ async def _run_trending_ingestion() -> int:
 
 
 async def _run_search_ingestion() -> int:
+    """Legacy: same as topic search (ingest_from_search_api removed)."""
     async with session_scope() as session:
         svc = TrendIngestionService(session)
-        return await svc.ingest_from_search_api()
+        return await svc.ingest_from_topic_search()
 
 
 async def _run_cleanup(days: int = 30) -> int:
@@ -29,8 +36,19 @@ async def _run_cleanup(days: int = 30) -> int:
 
 
 @celery.task(bind=True, acks_late=True, max_retries=3)
+def ingest_topic_search_repos(self) -> None:
+    """Discover repos via topic search (AI, agent, MCP, crypto), language filter (Go, Python, TypeScript, JavaScript), then upsert."""
+    try:
+        n = asyncio.run(_run_topic_search_ingestion())
+        logger.info("ingest_topic_search_repos: processed %s repos", n)
+    except Exception as exc:
+        logger.exception("ingest_topic_search_repos failed: %s", exc)
+        raise self.retry(exc=exc, countdown=120 * (2 ** self.request.retries))
+
+
+@celery.task(bind=True, acks_late=True, max_retries=3)
 def ingest_trending_repos(self) -> None:
-    """Scrape github.com/trending and upsert repos + snapshots."""
+    """Scrape github.com/trending and upsert repos + snapshots. (Legacy; pipeline uses topic search.)"""
     try:
         n = asyncio.run(_run_trending_ingestion())
         logger.info("ingest_trending_repos: processed %s repos", n)
@@ -41,7 +59,7 @@ def ingest_trending_repos(self) -> None:
 
 @celery.task(bind=True, acks_late=True, max_retries=3)
 def ingest_search_api_repos(self) -> None:
-    """Run GitHub Search API queries per category and upsert repos + snapshots."""
+    """Run GitHub Search API queries per category and upsert. (Legacy; pipeline uses topic search.)"""
     try:
         n = asyncio.run(_run_search_ingestion())
         logger.info("ingest_search_api_repos: processed %s repos", n)

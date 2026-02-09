@@ -1,21 +1,23 @@
 """Pipeline control: trigger ingestion → scoring → classification → content on demand.
 
-When you run the pipeline (POST /pipeline/run), a Celery chain runs five steps in order:
-  1. Ingest trending — scrape github.com/trending, fetch repo/README/languages/activity from GitHub API.
-  2. Ingest search — per-category search, fetch same metadata (capped per category).
-  3. Score & filter — compute trend score, set quality_passed on repos that pass filters.
-  4. Classify — keyword + embedding + language → assign repository_categories.
-  5. Generate content — LLM generates learning content for top repos per category.
+When you run the pipeline (POST /pipeline/run), a Celery chain runs four steps in order:
+  1. Ingest topic search — GitHub search by topics (AI, agent, MCP, crypto), languages (Go, Python, TypeScript, JavaScript).
+  2. Score & filter — compute trend score, set quality_passed on repos that pass filters.
+  3. Classify — keyword + embedding + language → assign repository_categories.
+  4. Generate content — LLM generates learning content for top repos per category.
 
+Use ?reset_first=true to clear all repo data (repos, snapshots, content, etc.) before running, so tracked/added counts reflect the new run.
 See LOCAL_SETUP.md "How the pipeline works" for details.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from celery import chain
 from pydantic import BaseModel
 
 from src.celery_app import celery
-from src.tasks.ingestion_tasks import ingest_trending_repos, ingest_search_api_repos
+from src.database import session_scope
+from src.services.trend_ingestion.service import TrendIngestionService
+from src.tasks.ingestion_tasks import ingest_topic_search_repos
 from src.tasks.scoring_tasks import score_and_filter_all_task
 from src.tasks.classification_tasks import classify_new_repos_task
 from src.tasks.content_tasks import generate_content_for_top_repos_task
@@ -23,8 +25,7 @@ from src.tasks.content_tasks import generate_content_for_top_repos_task
 router = APIRouter()
 
 PIPELINE_STEP_NAMES = [
-    "Ingest trending",
-    "Ingest search",
+    "Ingest topic search",
     "Score & filter",
     "Classify",
     "Generate content",
@@ -35,6 +36,11 @@ class PipelineTriggerResponse(BaseModel):
     started: bool
     message: str
     chain_id: str | None = None
+
+
+class PipelineResetResponse(BaseModel):
+    deleted: int
+    message: str
 
 
 class PipelineStepStatus(BaseModel):
@@ -65,13 +71,36 @@ def _collect_chain_results(chain_id: str) -> list:
     return results
 
 
+async def _reset_all_repo_data() -> int:
+    async with session_scope() as session:
+        svc = TrendIngestionService(session)
+        return await svc.reset_all_repo_data()
+
+
+@router.post("/pipeline/reset", response_model=PipelineResetResponse)
+async def reset_data() -> PipelineResetResponse:
+    """Clear all repo data (repos, snapshots, content, embeddings). Use before running the pipeline to start from scratch."""
+    deleted = await _reset_all_repo_data()
+    return PipelineResetResponse(
+        deleted=deleted,
+        message=f"Cleared {deleted} repositories and related data.",
+    )
+
+
 @router.post("/pipeline/run", response_model=PipelineTriggerResponse)
-async def trigger_pipeline() -> PipelineTriggerResponse:
-    """Run the full pipeline on demand: ingest (trending + search) → score → classify → content."""
+async def trigger_pipeline(
+    reset_first: bool = Query(False, description="Clear all repo data before running so tracked/added counts reflect this run"),
+) -> PipelineTriggerResponse:
+    """Run the full pipeline on demand: ingest (topic search) → score → classify → content.
+    Set reset_first=true to delete all repositories and related data first (start from scratch)."""
+    if reset_first:
+        deleted = await _reset_all_repo_data()
+        message = f"Cleared {deleted} repositories. Pipeline started: ingest → score → classify → content."
+    else:
+        message = "Pipeline started. Tasks run in order: ingest topic search → score → classify → generate content."
     # Use .si() (immutable) so each task gets no args; otherwise chain passes previous result as first arg
     workflow = chain(
-        ingest_trending_repos.si(),
-        ingest_search_api_repos.si(),
+        ingest_topic_search_repos.si(),
         score_and_filter_all_task.si(),
         classify_new_repos_task.si(),
         generate_content_for_top_repos_task.si(),
@@ -79,7 +108,7 @@ async def trigger_pipeline() -> PipelineTriggerResponse:
     result = workflow.apply_async()
     return PipelineTriggerResponse(
         started=True,
-        message="Pipeline started. Tasks run in order: ingest trending → ingest search → score → classify → generate content.",
+        message=message,
         chain_id=result.id,
     )
 
@@ -88,7 +117,7 @@ async def trigger_pipeline() -> PipelineTriggerResponse:
 async def get_pipeline_status(chain_id: str) -> PipelineStatusResponse:
     """Return current pipeline progress: which step is running and each step's status.
     When the result backend (e.g. Redis) does not restore chain parent links, we get
-    only the last task; we then infer overall status from that and show 5 steps with
+    only the last task; we then infer overall status from that and show N steps with
     the last step reflecting the known state.
     """
     try:
@@ -106,7 +135,7 @@ async def get_pipeline_status(chain_id: str) -> PipelineStatusResponse:
 
     # Redis (and some backends) don't store .parent, so we often get only the last task.
     if len(results) != len(PIPELINE_STEP_NAMES):
-        # Single result = chain head (last task). Map its state to step 5; steps 1–4 unknown.
+        # Single result = chain head (last task). Map its state to last step; earlier steps unknown.
         r = results[0]
         state = (r.state or "PENDING").upper()
         if state == "SUCCESS":

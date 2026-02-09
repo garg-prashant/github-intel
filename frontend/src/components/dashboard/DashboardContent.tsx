@@ -13,12 +13,14 @@ async function clientFetchTrending(params: {
   category?: string;
   sort_by?: string;
   language?: string;
+  quality?: string;
   page?: number;
   page_size?: number;
 }): Promise<PaginatedResponse<TrendingRepoItem>> {
   const search = new URLSearchParams();
   if (params.category) search.set("category", params.category);
   if (params.language) search.set("language", params.language);
+  if (params.quality && params.quality !== "passed") search.set("quality", params.quality);
   const sortBy = params.sort_by ?? "score";
   if (sortBy === "recent_30d") {
     search.set("mode", "recent");
@@ -57,6 +59,7 @@ function ListSkeleton() {
 export function DashboardContent() {
   const [category] = useQueryState("category", { defaultValue: "" });
   const [sortBy] = useQueryState("sort_by", { defaultValue: "score" });
+  const [quality] = useQueryState("quality", { defaultValue: "passed" });
   const [pageParam] = useQueryState("page", { defaultValue: "1" });
   const page = Math.max(1, parseInt(pageParam || "1", 10));
 
@@ -71,6 +74,7 @@ export function DashboardContent() {
     clientFetchTrending({
       category: category || undefined,
       sort_by: sortBy,
+      quality: quality || "passed",
       page,
       page_size: 20,
     })
@@ -92,7 +96,7 @@ export function DashboardContent() {
     return () => {
       cancelled = true;
     };
-  }, [category, sortBy, page]);
+  }, [category, sortBy, quality, page]);
 
   if (error) {
     return (

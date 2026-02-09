@@ -80,5 +80,5 @@ async def score_and_filter_all(session: AsyncSession) -> int:
         repo.current_trend_score = score
         repo.stars_gained_30d = _stars_gained_in_window(repo.trend_snapshots, RECENT_DAYS)
         repo.quality_passed = passes_quality_filters(repo)
-    await session.commit()
+        await session.commit()
     return len(score_by_id)

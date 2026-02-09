@@ -91,5 +91,5 @@ async def generate_content_for_top_repos(session: AsyncSession) -> int:
             if row:
                 created += 1
                 existing_types.add(content_type)
-    await session.commit()
+        await session.commit()
     return created

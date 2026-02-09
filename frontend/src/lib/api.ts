@@ -29,7 +29,7 @@ export async function fetchCategories(): Promise<import("./types").CategoryItem[
 }
 
 export async function fetchStats(): Promise<import("./types").Stats> {
-  const res = await fetch(`${API_URL}/api/v1/stats`, defaultOptions);
+  const res = await fetch(`${API_URL}/api/v1/stats`, { cache: "no-store" });
   if (!res.ok) throw new Error("Failed to fetch stats");
   return res.json();
 }
@@ -49,6 +49,19 @@ export async function triggerPipeline(): Promise<{ started: boolean; message: st
   if (!res.ok) {
     const err = await res.text();
     throw new Error(err || "Failed to trigger pipeline");
+  }
+  return res.json();
+}
+
+export async function clearExistingData(): Promise<{ deleted: number; message: string }> {
+  const res = await fetch(`${API_URL}/api/v1/pipeline/reset`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(err || "Failed to clear data");
   }
   return res.json();
 }

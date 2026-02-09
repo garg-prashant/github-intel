@@ -3,12 +3,13 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Play, Check, Loader2, Circle, XCircle } from "lucide-react";
-import { triggerPipeline, fetchPipelineStatus, type PipelineStatus } from "@/lib/api";
+import { triggerPipeline, clearExistingData, fetchPipelineStatus, type PipelineStatus } from "@/lib/api";
 
 const POLL_INTERVAL_MS = 2500;
 
 export function TriggerPipelineButton() {
   const [loading, setLoading] = useState(false);
+  const [clearLoading, setClearLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<PipelineStatus | null>(null);
@@ -67,17 +68,45 @@ export function TriggerPipelineButton() {
     }
   }
 
+  async function handleClear() {
+    setClearLoading(true);
+    setMessage(null);
+    setError(null);
+    try {
+      const result = await clearExistingData();
+      setMessage(result.message);
+      router.refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to clear data");
+    } finally {
+      setClearLoading(false);
+    }
+  }
+
   return (
     <div className="flex flex-col items-end gap-3 w-full sm:w-auto">
-      <button
-        type="button"
-        onClick={handleRun}
-        disabled={loading}
-        className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:opacity-90 disabled:opacity-50"
-      >
-        <Play className="h-4 w-4" aria-hidden />
-        {loading ? "Running…" : "Run pipeline now"}
-      </button>
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          onClick={handleClear}
+          disabled={clearLoading || loading}
+          className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-2.5 text-sm font-semibold text-[var(--foreground)] shadow-sm transition hover:bg-[var(--border)] disabled:opacity-50"
+        >
+          {clearLoading ? (
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+          ) : null}
+          {clearLoading ? "Clearing…" : "Clear existing data"}
+        </button>
+        <button
+          type="button"
+          onClick={handleRun}
+          disabled={loading}
+          className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:opacity-90 disabled:opacity-50"
+        >
+          <Play className="h-4 w-4" aria-hidden />
+          {loading ? "Running…" : "Run pipeline now"}
+        </button>
+      </div>
 
       {progress && progress.steps.length > 0 && (
         <div className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4 text-left shadow-sm">
