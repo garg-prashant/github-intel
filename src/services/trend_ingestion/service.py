@@ -153,14 +153,15 @@ class TrendIngestionService:
             logger.info("Capping trending repos to %s", max_trending)
         return await self._fetch_and_upsert_repos(full_names)
 
-    async def ingest_from_topic_search(self) -> int:
-        """Discover repos via topic search (AI, agent, MCP, crypto), filter by language (Go, Python, TypeScript, JavaScript), then upsert."""
+    async def ingest_from_topic_search(self, topic_terms: list[str] | None = None) -> int:
+        """Discover repos via topic search. Uses topic_terms if provided, else TOPIC_SEARCH_TERMS. Filters by language (Go, Python, TypeScript, JavaScript), then upsert."""
         settings = Settings()
         max_per_topic = settings.max_repos_per_category
         total_cap = settings.max_trending_repos
+        terms = topic_terms if topic_terms else TOPIC_SEARCH_TERMS
         seen: dict[str, int] = {}  # full_name -> stars_count for dedupe and sort
         async with GitHubClient() as client:
-            for topic in TOPIC_SEARCH_TERMS:
+            for topic in terms:
                 query = f"topic:{topic} stars:>{MIN_STARS_TOPIC}"
                 try:
                     data = await client.search_repositories(query, page=1, per_page=max_per_topic)
@@ -178,7 +179,7 @@ class TrendIngestionService:
                 except Exception as e:
                     logger.warning("Topic search failed %s: %s", query, e)
         if not seen:
-            logger.warning("No repos from topic search (topics=%s, languages=%s)", TOPIC_SEARCH_TERMS, list(ALLOWED_LANGUAGES))
+            logger.warning("No repos from topic search (topics=%s, languages=%s)", terms, list(ALLOWED_LANGUAGES))
             return 0
         # Sort by stars desc, take up to total_cap
         full_names = [fn for fn, _ in sorted(seen.items(), key=lambda x: -x[1])[:total_cap]]

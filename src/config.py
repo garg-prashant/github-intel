@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Literal
+import json
+from typing import Any, Literal
 
 from pydantic import Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -71,6 +72,13 @@ class Settings(BaseSettings):
         description="Max repos to fetch from trending scrape (total across all views)",
     )
 
+    # Categories: optional JSON array of {slug, name, description, keywords}; if not set use defaults from constants
+    categories_json: str | None = Field(
+        default=None,
+        alias="CATEGORIES",
+        description="Optional JSON array of category objects (slug, name, description, keywords). If not set, default categories are used.",
+    )
+
     # API — store as string so env doesn't require JSON; expose as list via cors_origins computed field
     cors_origins_raw: str = Field(
         default="http://localhost:3000",
@@ -80,6 +88,22 @@ class Settings(BaseSettings):
 
     # App
     version: str = Field(default="0.1.0")
+
+    @computed_field
+    @property
+    def categories(self) -> list[dict[str, Any]]:
+        """Parse CATEGORIES JSON from env, or return default categories from constants."""
+        from src.constants import DEFAULT_CATEGORIES
+
+        if not self.categories_json or not self.categories_json.strip():
+            return DEFAULT_CATEGORIES
+        try:
+            data = json.loads(self.categories_json)
+            if isinstance(data, list) and len(data) > 0:
+                return data
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return DEFAULT_CATEGORIES
 
     @computed_field
     @property

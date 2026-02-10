@@ -1,5 +1,5 @@
 #!/usr/bin/env -S python3
-"""Seed the 7 static categories. Run once after migrations."""
+"""Seed categories. Run once after migrations. Uses CATEGORIES from env (JSON) or defaults from constants."""
 
 from __future__ import annotations
 
@@ -19,59 +19,15 @@ from src.models.base import Base
 from src.models import *  # noqa: F401, F403
 
 
-CATEGORIES = [
-    {
-        "slug": "ai-ml",
-        "name": "AI & Machine Learning",
-        "description": "Machine learning frameworks, training, and inference tooling",
-        "keywords": ["pytorch", "tensorflow", "neural", "machine learning", "deep learning", "training", "inference", "transformers"],
-    },
-    {
-        "slug": "llms-agents",
-        "name": "LLMs & Agents",
-        "description": "Large language models, agents, RAG, and orchestration",
-        "keywords": ["llm", "agent", "RAG", "retrieval", "langchain", "openai", "anthropic", "orchestration", "prompt"],
-    },
-    {
-        "slug": "mcp-tooling",
-        "name": "MCP & Tooling",
-        "description": "Model Context Protocol, MCP servers, and AI tooling",
-        "keywords": ["mcp", "model context protocol", "mcp server", "tool", "plugin"],
-    },
-    {
-        "slug": "backend",
-        "name": "Backend",
-        "description": "API frameworks, services, and backend infrastructure",
-        "keywords": ["api", "backend", "framework", "rest", "graphql", "server", "microservice"],
-    },
-    {
-        "slug": "python-libs",
-        "name": "Python Libraries",
-        "description": "Popular Python libraries and utilities",
-        "keywords": ["python", "library", "package", "pip", "pypi"],
-    },
-    {
-        "slug": "web3-crypto",
-        "name": "Web3 & Crypto",
-        "description": "Blockchain, smart contracts, and crypto tooling",
-        "keywords": ["blockchain", "ethereum", "smart contract", "web3", "crypto", "defi", "solidity"],
-    },
-    {
-        "slug": "devops-mlops",
-        "name": "DevOps & MLOps",
-        "description": "CI/CD, deployment, and ML operations",
-        "keywords": ["devops", "mlops", "ci/cd", "deploy", "kubernetes", "docker", "pipeline", "monitoring"],
-    },
-]
-
-
 async def seed() -> None:
     settings = Settings()
+    categories = settings.categories
+    source = "env (CATEGORIES)" if (settings.categories_json and settings.categories_json.strip()) else "constants"
     engine = create_async_engine(settings.database_url, echo=False)
     async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     async with async_session() as session:
-        for i, cat in enumerate(CATEGORIES, start=1):
+        for i, cat in enumerate(categories, start=1):
             await session.execute(
                 text("""
                 INSERT INTO categories (id, slug, name, description, keywords)
@@ -91,7 +47,8 @@ async def seed() -> None:
             )
         await session.commit()
     await engine.dispose()
-    print(f"Seeded {len(CATEGORIES)} categories.")
+    slugs = [c["slug"] for c in categories]
+    print(f"Seeded {len(categories)} categories from {source}: {slugs}")
 
 
 if __name__ == "__main__":

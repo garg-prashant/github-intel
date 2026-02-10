@@ -27,7 +27,7 @@ export default async function DashboardPage() {
             Quality-filtered repos with AI-generated learning content. Run the pipeline to refresh.
           </p>
         </div>
-        <TriggerPipelineButton />
+        <TriggerPipelineButton categories={categories} />
       </div>
 
       <StatsStrip stats={stats} />

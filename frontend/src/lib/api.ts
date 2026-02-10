@@ -23,7 +23,7 @@ export async function fetchTrendingRepos(params: {
 }
 
 export async function fetchCategories(): Promise<import("./types").CategoryItem[]> {
-  const res = await fetch(`${API_URL}/api/v1/categories`, defaultOptions);
+  const res = await fetch(`${API_URL}/api/v1/categories`, { cache: "no-store" });
   if (!res.ok) throw new Error("Failed to fetch categories");
   return res.json();
 }
@@ -40,10 +40,14 @@ export async function fetchRepository(id: number): Promise<import("./types").Rep
   return res.json();
 }
 
-export async function triggerPipeline(): Promise<{ started: boolean; message: string; chain_id?: string }> {
+export async function triggerPipeline(params?: {
+  categories?: string[];
+}): Promise<{ started: boolean; message: string; chain_id?: string }> {
+  const body = params?.categories?.length ? { categories: params.categories } : {};
   const res = await fetch(`${API_URL}/api/v1/pipeline/run`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
     cache: "no-store",
   });
   if (!res.ok) {

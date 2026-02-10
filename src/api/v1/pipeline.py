@@ -10,11 +10,12 @@ Use ?reset_first=true to clear all repo data (repos, snapshots, content, etc.) b
 See LOCAL_SETUP.md "How the pipeline works" for details.
 """
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query
 from celery import chain
 from pydantic import BaseModel
 
 from src.celery_app import celery
+from src.config import Settings
 from src.database import session_scope
 from src.services.trend_ingestion.service import TrendIngestionService
 from src.tasks.ingestion_tasks import ingest_topic_search_repos
@@ -30,6 +31,12 @@ PIPELINE_STEP_NAMES = [
     "Classify",
     "Generate content",
 ]
+
+
+class PipelineRunBody(BaseModel):
+    """Optional body for POST /pipeline/run. Restrict ingestion to these category slugs (uses each category's search_topic)."""
+
+    categories: list[str] | None = None
 
 
 class PipelineTriggerResponse(BaseModel):
@@ -87,20 +94,47 @@ async def reset_data() -> PipelineResetResponse:
     )
 
 
+def _topic_terms_for_categories(category_slugs: list[str]) -> list[str]:
+    """Resolve category slugs to GitHub topic search terms from configured categories (search_topic)."""
+    settings = Settings()
+    slug_to_topic: dict[str, str] = {}
+    for cat in settings.categories:
+        slug = cat.get("slug")
+        topic = cat.get("search_topic")
+        if isinstance(slug, str) and isinstance(topic, str):
+            slug_to_topic[slug] = topic
+    terms: list[str] = []
+    seen: set[str] = set()
+    for slug in category_slugs:
+        t = slug_to_topic.get(slug)
+        if t and t not in seen:
+            terms.append(t)
+            seen.add(t)
+    return terms
+
+
 @router.post("/pipeline/run", response_model=PipelineTriggerResponse)
 async def trigger_pipeline(
     reset_first: bool = Query(False, description="Clear all repo data before running so tracked/added counts reflect this run"),
+    body: PipelineRunBody | None = Body(None),
 ) -> PipelineTriggerResponse:
     """Run the full pipeline on demand: ingest (topic search) → score → classify → content.
-    Set reset_first=true to delete all repositories and related data first (start from scratch)."""
+    Set reset_first=true to delete all repositories and related data first (start from scratch).
+    Optionally pass body with categories: list of slugs to scrape only those (uses each category's search_topic)."""
     if reset_first:
         deleted = await _reset_all_repo_data()
         message = f"Cleared {deleted} repositories. Pipeline started: ingest → score → classify → content."
     else:
         message = "Pipeline started. Tasks run in order: ingest topic search → score → classify → generate content."
+    topic_terms: list[str] | None = None
+    if body and body.categories:
+        topic_terms = _topic_terms_for_categories(body.categories)
+        if topic_terms:
+            message += f" Ingestion limited to topics: {', '.join(topic_terms)}."
     # Use .si() (immutable) so each task gets no args; otherwise chain passes previous result as first arg
+    first_task = ingest_topic_search_repos.si(topic_terms=topic_terms) if topic_terms else ingest_topic_search_repos.si()
     workflow = chain(
-        ingest_topic_search_repos.si(),
+        first_task,
         score_and_filter_all_task.si(),
         classify_new_repos_task.si(),
         generate_content_for_top_repos_task.si(),

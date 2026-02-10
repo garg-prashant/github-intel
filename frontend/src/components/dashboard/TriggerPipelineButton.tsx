@@ -4,17 +4,37 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Play, Check, Loader2, Circle, XCircle } from "lucide-react";
 import { triggerPipeline, clearExistingData, fetchPipelineStatus, type PipelineStatus } from "@/lib/api";
+import { CATEGORY_COLORS } from "@/lib/constants";
+import type { CategoryItem } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 const POLL_INTERVAL_MS = 2500;
 
-export function TriggerPipelineButton() {
+interface TriggerPipelineButtonProps {
+  categories: CategoryItem[];
+}
+
+export function TriggerPipelineButton({ categories }: TriggerPipelineButtonProps) {
   const [loading, setLoading] = useState(false);
   const [clearLoading, setClearLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<PipelineStatus | null>(null);
+  /** Selected category slugs for scrape; empty = scrape all categories */
+  const [scrapeCategories, setScrapeCategories] = useState<Set<string>>(new Set());
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const router = useRouter();
+
+  const toggleScrapeCategory = (slug: string) => {
+    setScrapeCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(slug)) next.delete(slug);
+      else next.add(slug);
+      return next;
+    });
+  };
+
+  const selectAllScrapeCategories = () => setScrapeCategories(new Set());
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -32,7 +52,8 @@ export function TriggerPipelineButton() {
     setProgress(null);
     stopPolling();
     try {
-      const result = await triggerPipeline();
+      const categorySlugs = scrapeCategories.size > 0 ? Array.from(scrapeCategories) : undefined;
+      const result = await triggerPipeline(categorySlugs ? { categories: categorySlugs } : undefined);
       if (!result.started || !result.chain_id) {
         setMessage(result.message || "Pipeline did not start.");
         setLoading(false);
@@ -85,6 +106,37 @@ export function TriggerPipelineButton() {
 
   return (
     <div className="flex flex-col items-end gap-3 w-full sm:w-auto">
+      {categories.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 w-full sm:justify-end">
+          <span className="text-xs font-medium uppercase tracking-wider text-[var(--muted)]">Scrape for</span>
+          <button
+            type="button"
+            onClick={selectAllScrapeCategories}
+            className={cn(
+              "rounded-lg border px-3 py-2 text-sm font-medium transition",
+              scrapeCategories.size === 0
+                ? "border-[var(--accent)] bg-emerald-50 text-[var(--accent)]"
+                : "border-[var(--border)] bg-[var(--background)] text-[var(--muted)] hover:border-[var(--muted)] hover:text-[var(--foreground)]"
+            )}
+          >
+            All categories
+          </button>
+          {categories.map((c) => (
+            <button
+              type="button"
+              key={c.slug}
+              onClick={() => toggleScrapeCategory(c.slug)}
+              className={cn(
+                "rounded-lg border px-3 py-2 text-sm font-medium transition",
+                CATEGORY_COLORS[c.slug] ?? "border-[var(--border)] bg-[var(--background)] text-[var(--muted)]",
+                scrapeCategories.has(c.slug) ? "ring-2 ring-[var(--accent)] ring-offset-2 ring-offset-[var(--background)]" : "hover:opacity-90 opacity-70"
+              )}
+            >
+              {c.name}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-3">
         <button
           type="button"

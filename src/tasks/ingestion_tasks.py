@@ -10,10 +10,10 @@ from src.services.trend_ingestion.service import TrendIngestionService
 logger = logging.getLogger(__name__)
 
 
-async def _run_topic_search_ingestion() -> int:
+async def _run_topic_search_ingestion(topic_terms: list[str] | None = None) -> int:
     async with session_scope() as session:
         svc = TrendIngestionService(session)
-        return await svc.ingest_from_topic_search()
+        return await svc.ingest_from_topic_search(topic_terms=topic_terms)
 
 
 async def _run_trending_ingestion() -> int:
@@ -36,10 +36,10 @@ async def _run_cleanup(days: int = 30) -> int:
 
 
 @celery.task(bind=True, acks_late=True, max_retries=3)
-def ingest_topic_search_repos(self) -> None:
-    """Discover repos via topic search (AI, agent, MCP, crypto), language filter (Go, Python, TypeScript, JavaScript), then upsert."""
+def ingest_topic_search_repos(self, topic_terms: list[str] | None = None) -> None:
+    """Discover repos via topic search. Optional topic_terms restrict to those GitHub topics; else default terms (AI, agent, MCP, crypto)."""
     try:
-        n = asyncio.run(_run_topic_search_ingestion())
+        n = asyncio.run(_run_topic_search_ingestion(topic_terms=topic_terms))
         logger.info("ingest_topic_search_repos: processed %s repos", n)
     except Exception as exc:
         logger.exception("ingest_topic_search_repos failed: %s", exc)
